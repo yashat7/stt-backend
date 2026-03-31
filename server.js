@@ -2,6 +2,9 @@ const express = require("express");
 const axios = require("axios");
 const fs = require("fs");
 const speech = require("@google-cloud/speech");
+const ffmpeg = require("fluent-ffmpeg");
+const ffmpegPath = require("ffmpeg-static");
+
 require("dotenv").config();
 
 const app = express();
@@ -9,7 +12,10 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
-// 🔽 Google STT client (Render-compatible)
+// 🔥 Setup ffmpeg
+ffmpeg.setFfmpegPath(ffmpegPath);
+
+// 🔽 Google STT client
 const client = new speech.SpeechClient({
   credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON)
 });
@@ -28,6 +34,19 @@ async function downloadFile(url, path) {
   return new Promise((resolve, reject) => {
     writer.on("finish", resolve);
     writer.on("error", reject);
+  });
+}
+
+// 🔽 Convert MP4 → WAV
+function convertToWav(input, output) {
+  return new Promise((resolve, reject) => {
+    ffmpeg(input)
+      .toFormat("wav")
+      .audioChannels(1)
+      .audioFrequency(16000)
+      .on("end", resolve)
+      .on("error", reject)
+      .save(output);
   });
 }
 
@@ -69,7 +88,7 @@ app.post("/webhook", async (req, res) => {
     try {
       console.log("🎯 Processing recording:", recordingId);
 
-      // 🔽 Get recording details from Recall
+      // 🔽 Get recording details
       const response = await axios.get(
         `https://ap-northeast-1.recall.ai/api/v1/recording/${recordingId}/`,
         {
@@ -81,7 +100,6 @@ app.post("/webhook", async (req, res) => {
 
       console.log("📦 FULL RESPONSE:", JSON.stringify(response.data, null, 2));
 
-      // 🔥 FIXED parsing
       const recording =
         response.data.recording ||
         response.data.recordings?.[0] ||
@@ -91,7 +109,7 @@ app.post("/webhook", async (req, res) => {
 
       console.log("📦 MEDIA:", JSON.stringify(media, null, 2));
 
-      // 🔥 SMART FALLBACK (handles all Recall cases)
+      // 🔥 FINAL fallback (includes video_mixed)
       const fileUrl =
         media?.audio?.data?.download_url ||
         media?.mixed_audio?.data?.download_url ||
@@ -102,23 +120,30 @@ app.post("/webhook", async (req, res) => {
       console.log("🎧 File URL:", fileUrl);
 
       if (!fileUrl) {
-        console.log("❌ No audio/video found in response");
+        console.log("❌ No media found");
         return res.send("No media");
       }
 
-      const filePath = "./meeting.wav";
+      const videoPath = "./meeting.mp4";
+      const audioPath = "./meeting.wav";
 
-      // 🔽 Download file
-      console.log("⬇️ Downloading...");
-      await downloadFile(fileUrl, filePath);
+      // 🔽 Download video
+      console.log("⬇️ Downloading video...");
+      await downloadFile(fileUrl, videoPath);
+
+      // 🔽 Convert to WAV
+      console.log("🎧 Converting to WAV...");
+      await convertToWav(videoPath, audioPath);
 
       // 🔽 Transcribe
       console.log("🧠 Transcribing...");
-      const text = await transcribe(filePath);
+      const text = await transcribe(audioPath);
 
       console.log("🧠 FINAL TRANSCRIPT:", text);
 
-      fs.unlinkSync(filePath);
+      // 🔽 Cleanup
+      fs.unlinkSync(videoPath);
+      fs.unlinkSync(audioPath);
 
     } catch (error) {
       console.error("❌ ERROR:", error.response?.data || error.message);
@@ -130,7 +155,7 @@ app.post("/webhook", async (req, res) => {
 
 // health check
 app.get("/", (req, res) => {
-  res.send("Google STT backend running 🚀");
+  res.send("STT backend running 🚀");
 });
 
 // start server
