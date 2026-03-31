@@ -9,10 +9,11 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
-// 🔽 Google STT client
+// 🔽 Google STT client (Render-compatible)
 const client = new speech.SpeechClient({
   credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON)
 });
+
 // 🔽 Download file
 async function downloadFile(url, path) {
   const res = await axios({
@@ -38,10 +39,10 @@ async function transcribe(filePath) {
   const request = {
     audio: { content: audioBytes },
     config: {
-      encoding: "LINEAR16", // works best for wav
+      encoding: "LINEAR16",
       sampleRateHertz: 16000,
-      languageCode: "en-IN", // Hinglish
-      alternativeLanguageCodes: ["hi-IN"], // Hindi
+      languageCode: "en-IN",
+      alternativeLanguageCodes: ["hi-IN"],
       enableAutomaticPunctuation: true
     },
   };
@@ -62,12 +63,13 @@ app.post("/webhook", async (req, res) => {
   const recordingId = data?.recording?.id;
 
   console.log("📩 Event:", event);
+  console.log("📦 RAW WEBHOOK:", JSON.stringify(req.body, null, 2));
 
   if (event === "recording.done") {
     try {
       console.log("🎯 Processing recording:", recordingId);
 
-      // 🔽 Get recording details
+      // 🔽 Get recording details from Recall
       const response = await axios.get(
         `https://ap-northeast-1.recall.ai/api/v1/recording/${recordingId}/`,
         {
@@ -77,26 +79,35 @@ app.post("/webhook", async (req, res) => {
         }
       );
 
-      const recording = response.data.recordings?.[0];
+      console.log("📦 FULL RESPONSE:", JSON.stringify(response.data, null, 2));
+
+      // 🔥 FIXED parsing
+      const recording =
+        response.data.recording ||
+        response.data.recordings?.[0] ||
+        response.data;
+
       const media = recording?.media_shortcuts;
 
       console.log("📦 MEDIA:", JSON.stringify(media, null, 2));
 
-      // 🔥 ONLY AUDIO (Google STT needs audio)
+      // 🔥 SMART FALLBACK (handles all Recall cases)
       const fileUrl =
         media?.audio?.data?.download_url ||
-        media?.mixed_audio?.data?.download_url;
+        media?.mixed_audio?.data?.download_url ||
+        recording?.audio_url ||
+        recording?.video_url;
 
-      console.log("🎧 Audio URL:", fileUrl);
+      console.log("🎧 File URL:", fileUrl);
 
       if (!fileUrl) {
-        console.log("❌ No audio found (Google STT needs audio)");
-        return res.send("No audio");
+        console.log("❌ No audio/video found in response");
+        return res.send("No media");
       }
 
       const filePath = "./meeting.wav";
 
-      // 🔽 Download
+      // 🔽 Download file
       console.log("⬇️ Downloading...");
       await downloadFile(fileUrl, filePath);
 
