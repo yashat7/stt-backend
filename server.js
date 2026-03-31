@@ -95,6 +95,7 @@ app.post("/webhook", async (req, res) => {
       const fileUrl =
         media?.audio?.data?.download_url ||
         media?.mixed_audio?.data?.download_url ||
+        media?.video_mixed?.data?.download_url ||
         recording?.audio_url ||
         recording?.video_url;
 
